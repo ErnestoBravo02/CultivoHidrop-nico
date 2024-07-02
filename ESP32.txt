@@ -1,0 +1,116 @@
+//Librerías necesarias
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <DHT.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+// Definición de sensores
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define ONE_WIRE_BUS 5
+#define RELAY_PIN1 13
+#define RELAY_PIN2 12
+#define PH_PIN A0
+
+// inicialización de sensores y relé
+DHT dht(DHTPIN, DHTTYPE);
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+unsigned long previousMillis = 0;
+const unsigned long relayOnTime = 5 * 60 * 1000;
+const unsigned long relayOffTime = 50 * 60 * 1000;
+bool relayState = false;
+
+//configuración WiFi y cliente HTTP
+const char* ssid = "LucyLopez";
+const char* password = "ljlbermeo72";
+const char* serverName = "https://fcvt.000webhostapp.com/sensordata.php";
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  sensors.begin();
+
+  pinMode(RELAY_PIN1, OUTPUT);
+  pinMode(RELAY_PIN2, OUTPUT);
+  digitalWrite(RELAY_PIN1, LOW);
+  digitalWrite(RELAY_PIN2, LOW);
+
+  connectWiFi();
+}
+
+void loop() {
+  float humidityDHT = dht.readHumidity();
+  float temperatureDHT = dht.readTemperature();
+  
+  sensors.requestTemperatures();
+  float temperatureDS18B20 = sensors.getTempCByIndex(0);
+
+  int phValueRaw = analogRead(PH_PIN);
+  float voltage = phValueRaw * (5.0 / 4095.0);
+  float pHValue = 3.5 * voltage;
+
+  // Controlar el relé
+  unsigned long currentMillis = millis();
+  
+  if (relayState) {
+    if (currentMillis - previousMillis >= relayOnTime) {
+      relayState = false;
+      previousMillis = currentMillis;
+      digitalWrite(RELAY_PIN1, LOW);
+      digitalWrite(RELAY_PIN2, LOW);
+    }
+  } else {
+    if (currentMillis - previousMillis >= relayOffTime) {
+      relayState = true;
+      previousMillis = currentMillis;
+      digitalWrite(RELAY_PIN1, HIGH);
+      digitalWrite(RELAY_PIN2, HIGH);
+    }
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    sendSensorData(humidityDHT, temperatureDHT, temperatureDS18B20, pHValue);
+  } else {
+    connectWiFi();
+  }
+
+  delay(5000);
+}
+
+void connectWiFi() {
+  Serial.println("Conectando a WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Conectando...");
+  }
+  Serial.println("Conectado a WiFi");
+}
+
+//Petición HTTP para el envío de datos al servidor web
+void sendSensorData(float humidityDHT, float temperatureDHT, float temperatureDS18B20, float pHValue) {
+  HTTPClient http;
+
+  String httpRequestData = "humidityDHT=" + String(humidityDHT)
+                         + "&temperatureDHT=" + String(temperatureDHT)
+                         + "&temperatureDS18B20=" + String(temperatureDS18B20)
+                         + "&pH=" + String(pHValue);
+
+  http.begin(serverName);
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+  int httpResponseCode = http.POST(httpRequestData);
+
+  if (httpResponseCode > 0) {
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpResponseCode);
+  } else {
+    Serial.print("Error code: ");
+    Serial.println(httpResponseCode);
+  }
+
+  http.end();
+}
